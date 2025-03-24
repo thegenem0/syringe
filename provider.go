@@ -63,7 +63,19 @@ func (p *InjectionProvider) GetService(serviceType interface{}) (interface{}, er
 
 	p.resolutionStack = make([]reflect.Type, 0)
 
-	return p.resolveService(typeObj)
+	instance, err := p.resolveService(typeObj)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance != nil {
+		err = p.injectDependencies(instance)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return instance, nil
 }
 
 // RequireService resolves a service instance or panics if not found
@@ -203,34 +215,40 @@ func (p *InjectionProvider) createInstance(implementation interface{}) (interfac
 }
 
 // injectDependencies performs property injection
-func (p *InjectionProvider) injectDependencies(instance interface{}) error {
-	val := reflect.ValueOf(instance).Elem()
-	typ := val.Type()
+func (sp *InjectionProvider) injectDependencies(instance interface{}) error {
+	// Skip if it's not a pointer to a struct
+	val := reflect.ValueOf(instance)
+	if val.Kind() != reflect.Ptr || val.Elem().Kind() != reflect.Struct {
+		return nil
+	}
 
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		fieldVal := val.Field(i)
+	// Get the struct value
+	structVal := val.Elem()
+	structType := structVal.Type()
+
+	// Iterate through all fields
+	for i := 0; i < structVal.NumField(); i++ {
+		field := structVal.Field(i)
+		fieldType := structType.Field(i)
 
 		// Skip unexported fields
-		if !fieldVal.CanSet() {
+		if !field.CanSet() {
 			continue
 		}
 
-		// Only try to inject interface types
-		if field.Type.Kind() == reflect.Interface {
-			// See if we can resolve this service
-			service, err := p.resolveService(field.Type)
-			if err == nil {
-				fieldVal.Set(reflect.ValueOf(service))
+		// Only process interface fields (they're potential dependencies)
+		if fieldType.Type.Kind() == reflect.Interface {
+			// Try to get the service from the container
+			service, err := sp.GetService(fieldType.Type)
+			if err == nil && service != nil {
+				// Set the field value to the resolved service
+				field.Set(reflect.ValueOf(service))
 			}
-			// Silently continue if not found as property injection is optional
-			// might need to add some error handling around this
 		}
 	}
 
 	return nil
 }
-
 func (p *InjectionProvider) Dispose() {
 	panic("not implemented")
 }
